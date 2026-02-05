@@ -89,12 +89,23 @@ function stopCamera() {
 
         updateStatus();
         checkEnableCapture();
+
+        // Reset sizes
+        video.width = 0;
+        video.height = 0;
     }
 }
 
 function adjustCanvasSize() {
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // CRITICAL: OpenCV.js VideoCapture reads from video.width/height attributes
+    // These must match the intrinsic videoWidth/videoHeight
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+
+    video.width = w;
+    video.height = h;
+    canvas.width = w;
+    canvas.height = h;
 }
 
 // This function will handle the core logic
