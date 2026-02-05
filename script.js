@@ -11,20 +11,46 @@ let isCvReady = false;
 // Check if OpenCV is ready
 function onOpenCvReady() {
     isCvReady = true;
-    statusElem.innerText = 'OpenCV 準備完成。請開啟鏡頭。';
     console.log('OpenCV.js is ready');
+    updateStatus();
+    checkEnableCapture();
+}
+
+function updateStatus() {
+    if (!isCvReady) {
+        statusElem.innerText = '正在加載 OpenCV...';
+    } else if (!stream) {
+        statusElem.innerText = 'OpenCV 準備完成。請開啟鏡頭。';
+        startBtn.innerText = '開啟鏡頭';
+        startBtn.style.backgroundColor = '#34c759';
+    } else {
+        statusElem.innerText = '系統就緒。請對準畫面並點擊「分析畫面」。';
+        startBtn.innerText = '關閉鏡頭';
+        startBtn.style.backgroundColor = '#ff3b30';
+    }
+}
+
+function checkEnableCapture() {
+    if (isCvReady && stream) {
+        captureBtn.disabled = false;
+        captureBtn.style.backgroundColor = '#007aff';
+    } else {
+        captureBtn.disabled = true;
+        captureBtn.style.backgroundColor = '#ccc';
+    }
 }
 
 // Camera controls
-startBtn.addEventListener('click', startCamera);
+startBtn.addEventListener('click', () => {
+    if (stream) {
+        stopCamera();
+    } else {
+        startCamera();
+    }
+});
 captureBtn.addEventListener('click', processFrame);
 
 async function startCamera() {
-    if (stream) {
-        stopCamera();
-        return;
-    }
-
     const constraints = {
         video: {
             facingMode: 'environment', // Rear camera implementation
@@ -38,19 +64,16 @@ async function startCamera() {
         video.srcObject = stream;
         video.play();
 
-        startBtn.innerText = '關閉鏡頭';
-        startBtn.style.backgroundColor = '#ff3b30'; // Red
-
+        // Wait for video to be ready
         video.onloadedmetadata = () => {
             adjustCanvasSize();
-            if (isCvReady) {
-                captureBtn.disabled = false;
-                statusElem.innerText = '鏡頭已開啟。點擊「分析畫面」開始。';
-            }
+            updateStatus();
+            checkEnableCapture();
         };
     } catch (err) {
         console.error('Error opening camera:', err);
         statusElem.innerText = '無法開啟鏡頭: ' + err.message;
+        alert('無法開啟鏡頭: ' + err.message);
     }
 }
 
@@ -61,9 +84,11 @@ function stopCamera() {
         video.srcObject = null;
         startBtn.innerText = '開啟鏡頭';
         startBtn.style.backgroundColor = '#34c759';
-        captureBtn.disabled = true;
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        statusElem.innerText = '鏡頭已關閉。';
+
+        updateStatus();
+        checkEnableCapture();
     }
 }
 
