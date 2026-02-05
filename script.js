@@ -1,27 +1,43 @@
-const video = document.getElementById('videoInput');
-const canvas = document.getElementById('canvasOutput');
-const ctx = canvas.getContext('2d');
-const startBtn = document.getElementById('startBtn');
-const captureBtn = document.getElementById('captureBtn');
-const statusElem = document.getElementById('status');
-
+let video, canvas, ctx, startBtn, captureBtn, statusElem;
 let stream = null;
 let isCvReady = false;
 
-// Check if OpenCV is ready
-function onOpenCvReady() {
+// Main entry point
+document.addEventListener('DOMContentLoaded', () => {
+    video = document.getElementById('videoInput');
+    canvas = document.getElementById('canvasOutput');
+    ctx = canvas.getContext('2d');
+    startBtn = document.getElementById('startBtn');
+    captureBtn = document.getElementById('captureBtn');
+    statusElem = document.getElementById('status');
+
+    // Setup listeners
+    startBtn.addEventListener('click', () => {
+        if (stream) {
+            stopCamera();
+        } else {
+            startCamera();
+        }
+    });
+    captureBtn.addEventListener('click', processFrame);
+
+    // Check if OpenCV loaded before DOM
+    if (window.isOpenCvLoaded) {
+        initApp();
+    }
+});
+
+// Called by OpenCV onload (via HTML shim) or DOMContentLoaded
+window.initApp = function () {
     isCvReady = true;
     console.log('OpenCV.js is ready');
     updateStatus();
     checkEnableCapture();
 }
 
-function onOpenCvError() {
-    statusElem.innerText = 'OpenCV 加載失敗。請檢查網絡連接或重新整理網頁。';
-    alert('OpenCV 加載失敗。請檢查網絡連接。');
-}
-
 function updateStatus() {
+    if (!statusElem) return; // Guard in case DOM isn't ready
+
     if (!isCvReady) {
         statusElem.innerText = '正在加載 OpenCV...';
     } else if (!stream) {

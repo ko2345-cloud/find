@@ -6,6 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Onet Solver Helper</title>
     <link rel="stylesheet" href="style.css">
+    <script>
+        // Shim to handle OpenCV loading
+        window.isOpenCvLoaded = false;
+        function onOpenCvReady() {
+            window.isOpenCvLoaded = true;
+            if (window.initApp) window.initApp();
+        }
+        function onOpenCvError() {
+            alert('OpenCV 加載失敗。請檢查網絡連接。');
+        }
+    </script>
     <!-- Use jsdelivr which is generally faster and more reliable -->
     <script async src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.min.js" onload="onOpenCvReady();"
         onerror="onOpenCvError();" type="text/javascript"></script>
