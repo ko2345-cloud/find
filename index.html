@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onet Solver Helper</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Using a reliable CDN for OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>連連看消除助手</h1>
+        <p id="status">正在加載 OpenCV...</p>
+        
+        <div class="video-container">
+            <video id="videoInput" playsinline webkit-playsinline></video>
+            <canvas id="canvasOutput"></canvas>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">開啟鏡頭</button>
+            <button id="captureBtn" disabled>分析畫面</button>
+        </div>
+        
+        <div id="debugParams">
+             <!-- Debug sliders can go here later if needed -->
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
