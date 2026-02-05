@@ -132,17 +132,29 @@ function processFrame() {
         // Preprocessing
         let gray = new cv.Mat();
         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-        let binary = new cv.Mat();
-        cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+        // Stronger blur to remove noise details inside the cartoons
+        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
 
-        // Find contours
+        // Use Canny for edge detection instead of Adaptive Threshold
+        // This is often better for defined shapes like these bubbles
+        let edges = new cv.Mat();
+        cv.Canny(gray, edges, 50, 150);
+
+        // Dilate to close gaps in the edges (important for thin outlines)
+        let kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+        let dilated = new cv.Mat();
+        cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 1);
+
+        // Find contours from the dilated edges
         let contours = new cv.MatVector();
         let hierarchy = new cv.Mat();
-        cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
         let tiles = [];
+        let totalPixels = src.cols * src.rows;
+        let minTileArea = totalPixels * 0.005; // ~0.5% of screen (dynamic size)
+        let maxTileArea = totalPixels * 0.15;  // ~15% of screen
 
         // Filter contours to find potential game tiles
         for (let i = 0; i < contours.size(); ++i) {
@@ -151,40 +163,63 @@ function processFrame() {
             let area = rect.width * rect.height;
             let aspectRatio = rect.width / rect.height;
 
-            if (area > MIN_AREA && area < (src.cols * src.rows * 0.1) &&
-                aspectRatio > 0.8 && aspectRatio < 1.2) {
+            // Draw ALL contours in faint gray for debug (so we know if we are seeing them)
+            let p1 = new cv.Point(rect.x, rect.y);
+            let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+            cv.rectangle(src, p1, p2, new cv.Scalar(200, 200, 200, 100), 1);
+
+            // Relaxed constraints
+            if (area > minTileArea && area < maxTileArea &&
+                aspectRatio > 0.7 && aspectRatio < 1.3) {
+
+                // Further filter: Game tiles usually have a high fill ratio (convex)
+                // but these are circles, so bounding box fill is Pi/4 ~= 0.78.
+                // complex contours might be smaller.
+
                 tiles.push(rect);
-                // Draw detected tiles for debug
-                let color = new cv.Scalar(0, 255, 0, 255);
-                let p1 = new cv.Point(rect.x, rect.y);
-                let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
-                cv.rectangle(src, p1, p2, color, 2, cv.LINE_AA, 0);
+                // Draw ACCEPTED tiles in Green
+                cv.rectangle(src, p1, p2, new cv.Scalar(0, 255, 0, 255), 3);
             }
         }
 
-        if (tiles.length < 4) {
-            statusElem.innerText = '未能檢測到足夠的圖案 (' + tiles.length + ')。請靠近或調整角度。';
+        if (tiles.length < 2) {
+            statusElem.innerText = `檢測數量不足 (${tiles.length})。灰色框是所有偵測到的物體，綠色是符合條件的。`;
             cv.imshow('canvasOutput', src);
-            src.delete(); gray.delete(); binary.delete(); contours.delete(); hierarchy.delete();
+
+            // Cleanup
+            src.delete(); gray.delete(); edges.delete(); dilated.delete();
+            kernel.delete(); contours.delete(); hierarchy.delete();
             return;
         }
 
         // Logic to organize tiles into rows/cols and match them
-        // 1. Sort tiles by Y then X to group
-        // Note: Heuristic approach needed for irregular grids vs regular grids
-        // For Onet, usually a strict grid.
+        // 1. Sort tiles by Y then X to group (Rough grid sorting)
+        tiles.sort((a, b) => {
+            if (Math.abs(a.y - b.y) > a.height * 0.5) return a.y - b.y; // Different rows
+            return a.x - b.x; // Same row
+        });
 
         // Simplified Logic: Extract ROIs and Compare
         const rois = [];
         for (let i = 0; i < tiles.length; i++) {
             let rect = tiles[i];
-            let roi = src.roi(rect);
+
+            // Shrink ROI slightly to avoid border noise
+            let margin = 4;
+            let safeRect = new cv.Rect(
+                Math.min(src.cols - 1, Math.max(0, rect.x + margin)),
+                Math.min(src.rows - 1, Math.max(0, rect.y + margin)),
+                Math.max(1, rect.width - margin * 2),
+                Math.max(1, rect.height - margin * 2)
+            );
+
+            let roi = src.roi(safeRect);
             let resized = new cv.Mat();
             cv.resize(roi, resized, new cv.Size(32, 32));
             rois.push({
                 id: i,
                 rect: rect,
-                mat: resized, // Keep small mat for comparison
+                mat: resized,
                 center: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
             });
             roi.delete();
@@ -197,24 +232,26 @@ function processFrame() {
         for (let i = 0; i < rois.length; i++) {
             if (visited[i]) continue;
 
+            // Find BEST match, not just first match
+            let bestMatchIndex = -1;
+            let minDiff = Number.MAX_VALUE;
+
             for (let j = i + 1; j < rois.length; j++) {
                 if (visited[j]) continue;
 
-                // Compare rois[i] and rois[j]
-                if (areVisuallySimilar(rois[i].mat, rois[j].mat)) {
-                    // Start Path Check (Conceptually)
-                    // Since we don't have the abstract grid structure (2D array), 
-                    // we would normally need to map these rects to a virtual grid [row][col].
-                    // For now, we highlight ALL matching pairs for visual feedback, 
-                    // or implement a basic line-of-sight check.
+                let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
 
-                    if (checkPathConnectivity(rois[i], rois[j], tiles)) {
-                        pairs.push([rois[i], rois[j]]);
-                        visited[i] = true;
-                        visited[j] = true; // Simple greedy matching, ideal Onet might need more state
-                        break;
-                    }
+                // Empirical threshold for 32x32 image
+                if (diffScore < 1500 && diffScore < minDiff) {
+                    minDiff = diffScore;
+                    bestMatchIndex = j;
                 }
+            }
+
+            if (bestMatchIndex !== -1) {
+                pairs.push([rois[i], rois[bestMatchIndex]]);
+                visited[i] = true;
+                visited[bestMatchIndex] = true;
             }
         }
 
@@ -223,16 +260,17 @@ function processFrame() {
             let p1 = pair[0].center;
             let p2 = pair[1].center;
             // Draw matching dots
-            cv.circle(src, new cv.Point(p1.x, p1.y), 10, new cv.Scalar(255, 0, 0, 255), -1); // Blue dot
-            cv.circle(src, new cv.Point(p2.x, p2.y), 10, new cv.Scalar(255, 0, 0, 255), -1);
-            cv.line(src, new cv.Point(p1.x, p1.y), new cv.Point(p2.x, p2.y), new cv.Scalar(0, 255, 255, 255), 2);
+            cv.circle(src, new cv.Point(p1.x, p1.y), 15, new cv.Scalar(0, 0, 255, 255), -1); // Red dot
+            cv.circle(src, new cv.Point(p2.x, p2.y), 15, new cv.Scalar(0, 0, 255, 255), -1);
+            cv.line(src, new cv.Point(p1.x, p1.y), new cv.Point(p2.x, p2.y), new cv.Scalar(255, 255, 0, 255), 3); // Cyan line
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對可消除圖案`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (共偵測到 ${tiles.length} 個區塊)`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
-        src.delete(); gray.delete(); binary.delete(); contours.delete(); hierarchy.delete();
+        src.delete(); gray.delete(); edges.delete(); dilated.delete();
+        kernel.delete(); contours.delete(); hierarchy.delete();
         rois.forEach(r => r.mat.delete());
 
     } catch (err) {
@@ -241,24 +279,22 @@ function processFrame() {
     }
 }
 
-// Helper: Simple L2 Norm diff
-function areVisuallySimilar(mat1, mat2) {
+// Helper: Get difference score (lower is more similar)
+function getDifficultyScore(mat1, mat2) {
     let diff = new cv.Mat();
     cv.absdiff(mat1, mat2, diff);
 
     let grayDiff = new cv.Mat();
     cv.cvtColor(diff, grayDiff, cv.COLOR_RGBA2GRAY);
 
-    // Threshold to ignore small noise (e.g., lighting variations)
     let binaryDiff = new cv.Mat();
-    cv.threshold(grayDiff, binaryDiff, 50, 255, cv.THRESH_BINARY); // Threshold 50 seems reasonable for camera feed
+    cv.threshold(grayDiff, binaryDiff, 50, 255, cv.THRESH_BINARY);
 
     let differentPixels = cv.countNonZero(binaryDiff);
 
     diff.delete(); grayDiff.delete(); binaryDiff.delete();
 
-    // If fewer than ~10% of pixels are different (32*32*0.1 ~= 100), consider them same
-    return differentPixels < 50;
+    return differentPixels;
 }
 
 // Helper: Check if line of sight is clear (Simplified 1-line check for MVP)
