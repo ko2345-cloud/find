@@ -16,6 +16,11 @@ function onOpenCvReady() {
     checkEnableCapture();
 }
 
+function onOpenCvError() {
+    statusElem.innerText = 'OpenCV 加載失敗。請檢查網絡連接或重新整理網頁。';
+    alert('OpenCV 加載失敗。請檢查網絡連接。');
+}
+
 function updateStatus() {
     if (!isCvReady) {
         statusElem.innerText = '正在加載 OpenCV...';
@@ -240,18 +245,20 @@ function processFrame() {
 function areVisuallySimilar(mat1, mat2) {
     let diff = new cv.Mat();
     cv.absdiff(mat1, mat2, diff);
+
     let grayDiff = new cv.Mat();
     cv.cvtColor(diff, grayDiff, cv.COLOR_RGBA2GRAY);
-    let score = cv.countNonZero(grayDiff); // Simple pixel count logic or sum
-    let sum = cv.sumElems(grayDiff);
 
-    // Better metric: Mean pixel difference
-    let totalDiff = sum.val[0];
+    // Threshold to ignore small noise (e.g., lighting variations)
+    let binaryDiff = new cv.Mat();
+    cv.threshold(grayDiff, binaryDiff, 50, 255, cv.THRESH_BINARY); // Threshold 50 seems reasonable for camera feed
 
-    diff.delete(); grayDiff.delete();
+    let differentPixels = cv.countNonZero(binaryDiff);
 
-    // Threshold depends on image content, tuning needed
-    return totalDiff < SIMILARITY_THRESHOLD * 10; // Relaxed for real world lighting
+    diff.delete(); grayDiff.delete(); binaryDiff.delete();
+
+    // If fewer than ~10% of pixels are different (32*32*0.1 ~= 100), consider them same
+    return differentPixels < 50;
 }
 
 // Helper: Check if line of sight is clear (Simplified 1-line check for MVP)
