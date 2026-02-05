@@ -133,61 +133,64 @@ function processFrame() {
         let gray = new cv.Mat();
         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
-        // Stronger blur to remove noise details inside the cartoons
-        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
+        // Blur to remove grid noise
+        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-        // Use Canny for edge detection instead of Adaptive Threshold
-        // This is often better for defined shapes like these bubbles
-        let edges = new cv.Mat();
-        cv.Canny(gray, edges, 50, 150);
+        // Use OTSU Thresholding - automatically finds best split between light tiles and background
+        // Assumes tiles are lighter than background (common in these games)
+        let binary = new cv.Mat();
+        cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
 
-        // Dilate to close gaps in the edges (important for thin outlines)
+        // Dilate slightly to fill holes in icons
         let kernel = cv.Mat.ones(3, 3, cv.CV_8U);
         let dilated = new cv.Mat();
-        cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 1);
+        cv.dilate(binary, dilated, kernel, new cv.Point(-1, -1), 1);
 
-        // Find contours from the dilated edges
+        // Find contours
         let contours = new cv.MatVector();
         let hierarchy = new cv.Mat();
         cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
+        console.log(`Found ${contours.size()} total contours`);
+
         let tiles = [];
         let totalPixels = src.cols * src.rows;
-        let minTileArea = totalPixels * 0.005; // ~0.5% of screen (dynamic size)
-        let maxTileArea = totalPixels * 0.15;  // ~15% of screen
+        let minTileArea = totalPixels * 0.005; // 0.5%
+        let maxTileArea = totalPixels * 0.10;  // 10%
 
-        // Filter contours to find potential game tiles
+        // Filter contours
         for (let i = 0; i < contours.size(); ++i) {
             let cnt = contours.get(i);
             let rect = cv.boundingRect(cnt);
             let area = rect.width * rect.height;
             let aspectRatio = rect.width / rect.height;
 
-            // Draw ALL contours in faint gray for debug (so we know if we are seeing them)
+            // Draw ALL contours in faint gray for debug
             let p1 = new cv.Point(rect.x, rect.y);
             let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
-            cv.rectangle(src, p1, p2, new cv.Scalar(200, 200, 200, 100), 1);
+            cv.rectangle(src, p1, p2, new cv.Scalar(100, 100, 100, 255), 1);
 
-            // Relaxed constraints
+            // Filter logic
             if (area > minTileArea && area < maxTileArea &&
                 aspectRatio > 0.7 && aspectRatio < 1.3) {
 
-                // Further filter: Game tiles usually have a high fill ratio (convex)
-                // but these are circles, so bounding box fill is Pi/4 ~= 0.78.
-                // complex contours might be smaller.
-
                 tiles.push(rect);
                 // Draw ACCEPTED tiles in Green
-                cv.rectangle(src, p1, p2, new cv.Scalar(0, 255, 0, 255), 3);
+                cv.rectangle(src, p1, p2, new cv.Scalar(0, 255, 0, 255), 2);
             }
         }
 
-        if (tiles.length < 2) {
-            statusElem.innerText = `檢測數量不足 (${tiles.length})。灰色框是所有偵測到的物體，綠色是符合條件的。`;
-            cv.imshow('canvasOutput', src);
+        console.log(`Filtered down to ${tiles.length} tiles`);
 
-            // Cleanup
-            src.delete(); gray.delete(); edges.delete(); dilated.delete();
+        // DEBUG: Show the binary view briefly to check what computer sees? 
+        // useful for debugging but might confuse user. 
+        // Let's stick to overlay on src.
+
+        if (tiles.length < 2) {
+            statusElem.innerText = `檢測數量不足 (${tiles.length})。嘗試調整光線或角度。`;
+            cv.imshow('canvasOutput', src); // Show what we found so far
+
+            src.delete(); gray.delete(); binary.delete(); dilated.delete();
             kernel.delete(); contours.delete(); hierarchy.delete();
             return;
         }
@@ -269,7 +272,7 @@ function processFrame() {
         cv.imshow('canvasOutput', src);
 
         // Cleanup
-        src.delete(); gray.delete(); edges.delete(); dilated.delete();
+        src.delete(); gray.delete(); binary.delete(); dilated.delete();
         kernel.delete(); contours.delete(); hierarchy.delete();
         rois.forEach(r => r.mat.delete());
 
@@ -297,27 +300,135 @@ function getDifficultyScore(mat1, mat2) {
     return differentPixels;
 }
 
-// Helper: Check if line of sight is clear (Simplified 1-line check for MVP)
-// Real Onet requires 3-line check on a grid. Mapping spatial rects to grid is distinct step.
-// Here we perform a geometric check: DOES THE LINE INTERSECT ANY OTHER TILE?
+// Helper: Check if line of sight is clear (1, 2, or 3 segments)
+// Returns true if A and B can be connected by <= 3 segments without hitting other tiles
 function checkPathConnectivity(cellA, cellB, allTiles) {
-    // 1. Direct line check
-    if (!intersectsObstacles(cellA, cellB, allTiles)) return true;
+    // We treat all OTHER tiles as obstacles
+    // Shrink obstacles slightly to be forgiving?
+    // Or treating the center-to-center line as a "thin" ray is usually enough.
+    const obstacles = allTiles.filter(t => t !== cellA.rect && t !== cellB.rect);
 
-    // 2. One corner (2 segments) 
-    // Construct theoretical corner points and check segments...
+    const cA = cellA.center;
+    const cB = cellB.center;
 
-    // For V1 MVP, let's just return true if similar, to test matching.
-    // The user asked for "A and B can be eliminated if <= 3 lines".
-    // Implementing geometric 3-line pathfinding without a discrete grid is complex.
-    // We will assume simpler "Matching" feedback first, then refine connectivity.
-    return true;
+    // 1. Direct Line (0 turns, 1 segment)
+    if (isPathClear(cA, cB, obstacles)) return true;
+
+    // 2. One Turn (L-shape, 2 segments)
+    // Possible turning points: (cA.x, cB.y) and (cB.x, cA.y)
+    let c1 = { x: cA.x, y: cB.y };
+    if (isPathClear(cA, c1, obstacles) && isPathClear(c1, cB, obstacles)) return true;
+
+    let c2 = { x: cB.x, y: cA.y };
+    if (isPathClear(cA, c2, obstacles) && isPathClear(c2, cB, obstacles)) return true;
+
+    // 3. Two Turns (U or Z shape, 3 segments)
+    // Strategy: Raycast from A and B in 4 cardinal directions.
+    // If we find a common horizontal or vertical "bridge" line that connects them, valid.
+
+    // Scan X coordinates from all tiles to find candidate vertical bridge lines
+    // (gaps between columns) including boundaries.
+    let xCandidates = [
+        0, canvas.width,
+        cA.x, cB.x
+    ];
+    // Also add left/right of all obstacles to find "lanes"
+    for (let t of obstacles) {
+        xCandidates.push(t.x - 5);  // Gap to left
+        xCandidates.push(t.x + t.width + 5); // Gap to right
+    }
+
+    // Try Vertical Bridges (moving X)
+    for (let x of xCandidates) {
+        // Points on the bridge
+        let pA = { x: x, y: cA.y }; // Bridge start (aligned with A)
+        let pB = { x: x, y: cB.y }; // Bridge end (aligned with B)
+
+        // Path: A -> pA -> pB -> B
+        // Segments: A-pA (Horiz), pA-pB (Vert), pB-B (Horiz)
+        if (isPathClear(cA, pA, obstacles) &&
+            isPathClear(pA, pB, obstacles) &&
+            isPathClear(pB, cB, obstacles)) {
+            return true;
+        }
+    }
+
+    // Try Horizontal Bridges (moving Y)
+    let yCandidates = [
+        0, canvas.height,
+        cA.y, cB.y
+    ];
+    for (let t of obstacles) {
+        yCandidates.push(t.y - 5);
+        yCandidates.push(t.y + t.height + 5);
+    }
+
+    for (let y of yCandidates) {
+        let pA = { x: cA.x, y: y };
+        let pB = { x: cB.x, y: y };
+
+        // Path: A -> pA -> pB -> B
+        // Segments: A-pA (Vert), pA-pB (Horiz), pB-B (Vert)
+        if (isPathClear(cA, pA, obstacles) &&
+            isPathClear(pA, pB, obstacles) &&
+            isPathClear(pB, cB, obstacles)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
-function intersectsObstacles(start, end, allTiles) {
-    // Check if line segment from start.center to end.center hits any rect in allTiles (barring start/end)
-    // Detailed geometry collision math...
-    return false;
+// Check if a single segment from pStart to pEnd intersects any obstacle
+function isPathClear(pStart, pEnd, obstacles) {
+    // 1. Define segment bounding box for quick rejection
+    let minX = Math.min(pStart.x, pEnd.x);
+    let maxX = Math.max(pStart.x, pEnd.x);
+    let minY = Math.min(pStart.y, pEnd.y);
+    let maxY = Math.max(pStart.y, pEnd.y);
+
+    for (let rect of obstacles) {
+        // Quick AABB check: Does obstacle overlap the segment's extent?
+        if (rect.x > maxX || rect.x + rect.width < minX ||
+            rect.y > maxY || rect.y + rect.height < minY) {
+            continue;
+        }
+
+        // Detailed Line-Rect intersection
+        // Since our paths are strictly Horizontal or Vertical, this simplifies.
+        // We assume the "Point" has 0 width. But safely, we can check if the line center passes through the rect.
+
+        // Shrink rect slightly for leniency?
+        // Let's use strict arithmetic.
+
+        if (pStart.x === pEnd.x) {
+            // Vertical Line
+            // Line X must be within Rect X range
+            if (pStart.x >= rect.x && pStart.x <= rect.x + rect.width) {
+                // And Y intervals must overlap
+                // Interaction range: [max(segmentMin, rectMin), min(segmentMax, rectMax)]
+                // If that range is valid, they overlap.
+                let overlapStart = Math.max(minY, rect.y);
+                let overlapEnd = Math.min(maxY, rect.y + rect.height);
+                if (overlapStart < overlapEnd) return false;
+            }
+        } else if (pStart.y === pEnd.y) {
+            // Horizontal Line
+            if (pStart.y >= rect.y && pStart.y <= rect.y + rect.height) {
+                let overlapStart = Math.max(minX, rect.x);
+                let overlapEnd = Math.min(maxX, rect.x + rect.width);
+                if (overlapStart < overlapEnd) return false;
+            }
+        } else {
+            // Diagonal line (shouldn't happen in 1/2/3 turn logic normally, but safe fallback)
+            // Simplified: check mid point
+            let midX = (pStart.x + pEnd.x) / 2;
+            let midY = (pStart.y + pEnd.y) / 2;
+            if (midX > rect.x && midX < rect.x + rect.width &&
+                midY > rect.y && midY < rect.y + rect.height) return false;
+        }
+    }
+    return true;
 }
 
 // Handle window resize
