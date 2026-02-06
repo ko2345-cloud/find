@@ -191,8 +191,8 @@ function processFrame() {
                 aspectRatio > 0.7 && aspectRatio < 1.3) {
 
                 tiles.push(rect);
-                // Draw ACCEPTED tiles in Green
-                cv.rectangle(src, p1, p2, new cv.Scalar(0, 255, 0, 255), 2);
+                // Draw ACCEPTED tiles in Green - DISABLED for cleaner view v1.1
+                // cv.rectangle(src, p1, p2, new cv.Scalar(0, 255, 0, 255), 2);
             }
         }
 
@@ -335,7 +335,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組)`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.1`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
@@ -369,53 +369,74 @@ function getDifficultyScore(mat1, mat2) {
 
 // Helper: Check if line of sight is clear (1, 2, or 3 segments)
 // Returns true if A and B can be connected by <= 3 segments without hitting other tiles
+// v1.1: Added strict width check (thick line)
 function checkPathConnectivity(cellA, cellB, allTiles) {
-    // We treat all OTHER tiles as obstacles
-    // Shrink obstacles slightly to be forgiving?
-    // Or treating the center-to-center line as a "thin" ray is usually enough.
     const obstacles = allTiles.filter(t => t !== cellA.rect && t !== cellB.rect);
 
     const cA = cellA.center;
     const cB = cellB.center;
 
+    // v1.1 Strictness: Define a path thickness
+    // We check 3 parallel lines: center, left-offset, right-offset
+    // Offset is half the smaller dimension of the tile * 0.5 (conservative 50% width)
+    const thickness = Math.min(cellA.rect.width, cellA.rect.height) * 0.5;
+    const offset = thickness / 2;
+
+    function isThickPathClear(pStart, pEnd) {
+        // 1. Center line
+        if (!isPathClear(pStart, pEnd, obstacles)) return false;
+
+        // 2. Offsets
+        let oX = 0, oY = 0;
+        if (Math.abs(pStart.x - pEnd.x) < 1) {
+            // Vertical Line -> Offset X
+            oX = offset;
+        } else {
+            // Horizontal Line -> Offset Y
+            oY = offset;
+        }
+
+        let p1 = { x: pStart.x - oX, y: pStart.y - oY };
+        let p2 = { x: pEnd.x - oX, y: pEnd.y - oY };
+
+        let p3 = { x: pStart.x + oX, y: pStart.y + oY };
+        let p4 = { x: pEnd.x + oX, y: pEnd.y + oY };
+
+        if (!isPathClear(p1, p2, obstacles)) return false;
+        if (!isPathClear(p3, p4, obstacles)) return false;
+
+        return true;
+    }
+
     // 1. Direct Line (0 turns, 1 segment)
-    if (isPathClear(cA, cB, obstacles)) return true;
+    if (isThickPathClear(cA, cB)) return true;
 
     // 2. One Turn (L-shape, 2 segments)
-    // Possible turning points: (cA.x, cB.y) and (cB.x, cA.y)
     let c1 = { x: cA.x, y: cB.y };
-    if (isPathClear(cA, c1, obstacles) && isPathClear(c1, cB, obstacles)) return true;
+    if (isThickPathClear(cA, c1) && isThickPathClear(c1, cB)) return true;
 
     let c2 = { x: cB.x, y: cA.y };
-    if (isPathClear(cA, c2, obstacles) && isPathClear(c2, cB, obstacles)) return true;
+    if (isThickPathClear(cA, c2) && isThickPathClear(c2, cB)) return true;
 
     // 3. Two Turns (U or Z shape, 3 segments)
-    // Strategy: Raycast from A and B in 4 cardinal directions.
-    // If we find a common horizontal or vertical "bridge" line that connects them, valid.
-
-    // Scan X coordinates from all tiles to find candidate vertical bridge lines
-    // (gaps between columns) including boundaries.
+    // Scan X coordinates
     let xCandidates = [
         0, canvas.width,
         cA.x, cB.x
     ];
-    // Also add left/right of all obstacles to find "lanes"
     for (let t of obstacles) {
-        xCandidates.push(t.x - 5);  // Gap to left
-        xCandidates.push(t.x + t.width + 5); // Gap to right
+        xCandidates.push(t.x - thickness);  // Gap to left (adjusted for thickness)
+        xCandidates.push(t.x + t.width + thickness); // Gap to right
     }
 
     // Try Vertical Bridges (moving X)
     for (let x of xCandidates) {
-        // Points on the bridge
-        let pA = { x: x, y: cA.y }; // Bridge start (aligned with A)
-        let pB = { x: x, y: cB.y }; // Bridge end (aligned with B)
+        let pA = { x: x, y: cA.y };
+        let pB = { x: x, y: cB.y };
 
-        // Path: A -> pA -> pB -> B
-        // Segments: A-pA (Horiz), pA-pB (Vert), pB-B (Horiz)
-        if (isPathClear(cA, pA, obstacles) &&
-            isPathClear(pA, pB, obstacles) &&
-            isPathClear(pB, cB, obstacles)) {
+        if (isThickPathClear(cA, pA) &&
+            isThickPathClear(pA, pB) &&
+            isThickPathClear(pB, cB)) {
             return true;
         }
     }
@@ -426,19 +447,17 @@ function checkPathConnectivity(cellA, cellB, allTiles) {
         cA.y, cB.y
     ];
     for (let t of obstacles) {
-        yCandidates.push(t.y - 5);
-        yCandidates.push(t.y + t.height + 5);
+        yCandidates.push(t.y - thickness);
+        yCandidates.push(t.y + t.height + thickness);
     }
 
     for (let y of yCandidates) {
         let pA = { x: cA.x, y: y };
         let pB = { x: cB.x, y: y };
 
-        // Path: A -> pA -> pB -> B
-        // Segments: A-pA (Vert), pA-pB (Horiz), pB-B (Vert)
-        if (isPathClear(cA, pA, obstacles) &&
-            isPathClear(pA, pB, obstacles) &&
-            isPathClear(pB, cB, obstacles)) {
+        if (isThickPathClear(cA, pA) &&
+            isThickPathClear(pA, pB) &&
+            isThickPathClear(pB, cB)) {
             return true;
         }
     }
