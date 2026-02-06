@@ -181,10 +181,10 @@ function processFrame() {
             let area = rect.width * rect.height;
             let aspectRatio = rect.width / rect.height;
 
-            // Draw ALL contours in faint gray for debug
-            let p1 = new cv.Point(rect.x, rect.y);
-            let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
-            cv.rectangle(src, p1, p2, new cv.Scalar(100, 100, 100, 255), 1);
+            // Draw ALL contours - DISABLED to reduce clutter
+            // let p1 = new cv.Point(rect.x, rect.y);
+            // let p2 = new cv.Point(rect.x + rect.width, rect.y + rect.height);
+            // cv.rectangle(src, p1, p2, new cv.Scalar(100, 100, 100, 255), 1);
 
             // Filter logic
             if (area > minTileArea && area < maxTileArea &&
@@ -245,7 +245,6 @@ function processFrame() {
         }
 
         // 2. Find Pairs
-        // 2. Find Pairs
         let pairs = [];
         let visited = new Array(rois.length).fill(false);
 
@@ -260,8 +259,8 @@ function processFrame() {
 
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
 
-                // Empirical threshold for 32x32 image
-                if (diffScore < 1500) {
+                // Strict threshold for 32x32 image (v1.2: lowered to 1200)
+                if (diffScore < 1200) {
                     candidates.push({ index: j, score: diffScore });
                 }
             }
@@ -276,7 +275,7 @@ function processFrame() {
                 let targetRoi = rois[candidate.index];
 
                 // Check if a path exists between source (rois[i]) and target (targetRoi)
-                // We pass 'tiles' as the list of all obstacles
+                // v1.2: Use strict Manhattan pathfinding
                 if (checkPathConnectivity(rois[i], targetRoi, tiles)) {
                     bestMatchIndex = candidate.index;
                     break; // Use the first valid match found
@@ -335,7 +334,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.1`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.2`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
@@ -367,154 +366,84 @@ function getDifficultyScore(mat1, mat2) {
     return differentPixels;
 }
 
-// Helper: Check if line of sight is clear (1, 2, or 3 segments)
-// Returns true if A and B can be connected by <= 3 segments without hitting other tiles
-// v1.1: Added strict width check (thick line)
+// v1.2: Strict Onet Pathfinding (Orthogonal Only)
 function checkPathConnectivity(cellA, cellB, allTiles) {
     const obstacles = allTiles.filter(t => t !== cellA.rect && t !== cellB.rect);
-
     const cA = cellA.center;
     const cB = cellB.center;
 
-    // v1.1 Strictness: Define a path thickness
-    // We check 3 parallel lines: center, left-offset, right-offset
-    // Offset is half the smaller dimension of the tile * 0.5 (conservative 50% width)
-    const thickness = Math.min(cellA.rect.width, cellA.rect.height) * 0.5;
-    const offset = thickness / 2;
+    // Safety buffer: Assume path needs 5px width to be valid
+    const pathWidth = 5;
 
-    function isThickPathClear(pStart, pEnd) {
-        // 1. Center line
-        if (!isPathClear(pStart, pEnd, obstacles)) return false;
-
-        // 2. Offsets
-        let oX = 0, oY = 0;
-        if (Math.abs(pStart.x - pEnd.x) < 1) {
-            // Vertical Line -> Offset X
-            oX = offset;
-        } else {
-            // Horizontal Line -> Offset Y
-            oY = offset;
+    // Helper: Check if a strict horizontal segment is clear
+    function isHClear(y, x1, x2) {
+        let minX = Math.min(x1, x2);
+        let maxX = Math.max(x1, x2);
+        // Check intersection with all obstacles
+        for (let rect of obstacles) {
+            // Check vertical overlap with path line (y +/- width/2)
+            if (y + pathWidth / 2 < rect.y || y - pathWidth / 2 > rect.y + rect.height) continue;
+            // Check horizontal overlap
+            if (maxX > rect.x && minX < rect.x + rect.width) return false;
         }
-
-        let p1 = { x: pStart.x - oX, y: pStart.y - oY };
-        let p2 = { x: pEnd.x - oX, y: pEnd.y - oY };
-
-        let p3 = { x: pStart.x + oX, y: pStart.y + oY };
-        let p4 = { x: pEnd.x + oX, y: pEnd.y + oY };
-
-        if (!isPathClear(p1, p2, obstacles)) return false;
-        if (!isPathClear(p3, p4, obstacles)) return false;
-
         return true;
     }
 
-    // 1. Direct Line (0 turns, 1 segment)
-    if (isThickPathClear(cA, cB)) return true;
-
-    // 2. One Turn (L-shape, 2 segments)
-    let c1 = { x: cA.x, y: cB.y };
-    if (isThickPathClear(cA, c1) && isThickPathClear(c1, cB)) return true;
-
-    let c2 = { x: cB.x, y: cA.y };
-    if (isThickPathClear(cA, c2) && isThickPathClear(c2, cB)) return true;
-
-    // 3. Two Turns (U or Z shape, 3 segments)
-    // Scan X coordinates
-    let xCandidates = [
-        0, canvas.width,
-        cA.x, cB.x
-    ];
-    for (let t of obstacles) {
-        xCandidates.push(t.x - thickness);  // Gap to left (adjusted for thickness)
-        xCandidates.push(t.x + t.width + thickness); // Gap to right
+    // Helper: Check if a strict vertical segment is clear
+    function isVClear(x, y1, y2) {
+        let minY = Math.min(y1, y2);
+        let maxY = Math.max(y1, y2);
+        for (let rect of obstacles) {
+            // Check horizontal overlap with path line (x +/- width/2)
+            if (x + pathWidth / 2 < rect.x || x - pathWidth / 2 > rect.x + rect.width) continue;
+            // Check vertical overlap
+            if (maxY > rect.y && minY < rect.y + rect.height) return false;
+        }
+        return true;
     }
 
-    // Try Vertical Bridges (moving X)
+    // 1. Zero Turns (Same Row/Col)
+    if (Math.abs(cA.x - cB.x) < pathWidth) { // Same Col
+        if (isVClear(cA.x, cA.y, cB.y)) return true;
+    }
+    if (Math.abs(cA.y - cB.y) < pathWidth) { // Same Row
+        if (isHClear(cA.y, cA.x, cB.x)) return true;
+    }
+
+    // 2. One Turn (Corner)
+    // Corner 1: (cB.x, cA.y) -> Horizontal then Vertical matches
+    if (isHClear(cA.y, cA.x, cB.x) && isVClear(cB.x, cA.y, cB.y)) return true;
+    // Corner 2: (cA.x, cB.y) -> Vertical then Horizontal matches
+    if (isVClear(cA.x, cA.y, cB.y) && isHClear(cB.y, cA.x, cB.x)) return true;
+
+    // 3. Two Turns (Bridge)
+    // Horizontal Scanning (find vertical bridge)
+    let xCandidates = [0 - pathWidth, canvas.width + pathWidth, cA.x, cB.x];
+    for (let t of obstacles) {
+        xCandidates.push(t.x - pathWidth * 2);
+        xCandidates.push(t.x + t.width + pathWidth * 2);
+    }
     for (let x of xCandidates) {
-        let pA = { x: x, y: cA.y };
-        let pB = { x: x, y: cB.y };
-
-        if (isThickPathClear(cA, pA) &&
-            isThickPathClear(pA, pB) &&
-            isThickPathClear(pB, cB)) {
-            return true;
-        }
+        // Path: cA -> (x, cA.y) -> (x, cB.y) -> cB
+        if (isHClear(cA.y, cA.x, x) &&
+            isVClear(x, cA.y, cB.y) &&
+            isHClear(cB.y, x, cB.x)) return true;
     }
 
-    // Try Horizontal Bridges (moving Y)
-    let yCandidates = [
-        0, canvas.height,
-        cA.y, cB.y
-    ];
+    // Vertical Scanning (find horizontal bridge)
+    let yCandidates = [0 - pathWidth, canvas.height + pathWidth, cA.y, cB.y];
     for (let t of obstacles) {
-        yCandidates.push(t.y - thickness);
-        yCandidates.push(t.y + t.height + thickness);
+        yCandidates.push(t.y - pathWidth * 2);
+        yCandidates.push(t.y + t.height + pathWidth * 2);
     }
-
     for (let y of yCandidates) {
-        let pA = { x: cA.x, y: y };
-        let pB = { x: cB.x, y: y };
-
-        if (isThickPathClear(cA, pA) &&
-            isThickPathClear(pA, pB) &&
-            isThickPathClear(pB, cB)) {
-            return true;
-        }
+        // Path: cA -> (cA.x, y) -> (cB.x, y) -> cB
+        if (isVClear(cA.x, cA.y, y) &&
+            isHClear(y, cA.x, cB.x) &&
+            isVClear(cB.x, y, cB.y)) return true;
     }
 
     return false;
-}
-
-// Check if a single segment from pStart to pEnd intersects any obstacle
-function isPathClear(pStart, pEnd, obstacles) {
-    // 1. Define segment bounding box for quick rejection
-    let minX = Math.min(pStart.x, pEnd.x);
-    let maxX = Math.max(pStart.x, pEnd.x);
-    let minY = Math.min(pStart.y, pEnd.y);
-    let maxY = Math.max(pStart.y, pEnd.y);
-
-    for (let rect of obstacles) {
-        // Quick AABB check: Does obstacle overlap the segment's extent?
-        if (rect.x > maxX || rect.x + rect.width < minX ||
-            rect.y > maxY || rect.y + rect.height < minY) {
-            continue;
-        }
-
-        // Detailed Line-Rect intersection
-        // Since our paths are strictly Horizontal or Vertical, this simplifies.
-        // We assume the "Point" has 0 width. But safely, we can check if the line center passes through the rect.
-
-        // Shrink rect slightly for leniency?
-        // Let's use strict arithmetic.
-
-        if (pStart.x === pEnd.x) {
-            // Vertical Line
-            // Line X must be within Rect X range
-            if (pStart.x >= rect.x && pStart.x <= rect.x + rect.width) {
-                // And Y intervals must overlap
-                // Interaction range: [max(segmentMin, rectMin), min(segmentMax, rectMax)]
-                // If that range is valid, they overlap.
-                let overlapStart = Math.max(minY, rect.y);
-                let overlapEnd = Math.min(maxY, rect.y + rect.height);
-                if (overlapStart < overlapEnd) return false;
-            }
-        } else if (pStart.y === pEnd.y) {
-            // Horizontal Line
-            if (pStart.y >= rect.y && pStart.y <= rect.y + rect.height) {
-                let overlapStart = Math.max(minX, rect.x);
-                let overlapEnd = Math.min(maxX, rect.x + rect.width);
-                if (overlapStart < overlapEnd) return false;
-            }
-        } else {
-            // Diagonal line (shouldn't happen in 1/2/3 turn logic normally, but safe fallback)
-            // Simplified: check mid point
-            let midX = (pStart.x + pEnd.x) / 2;
-            let midY = (pStart.y + pEnd.y) / 2;
-            if (midX > rect.x && midX < rect.x + rect.width &&
-                midY > rect.y && midY < rect.y + rect.height) return false;
-        }
-    }
-    return true;
 }
 
 // Handle window resize
