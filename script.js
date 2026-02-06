@@ -52,12 +52,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Called by OpenCV onload (via HTML shim) or DOMContentLoaded
-window.initApp = function () {
+function initApp() {
     isCvReady = true;
     console.log('OpenCV.js is ready');
     updateStatus();
     checkEnableCapture();
 }
+// Export to window for HTML shim
+window.initApp = initApp;
 
 function updateStatus() {
     if (!statusElem) return; // Guard in case DOM isn't ready
