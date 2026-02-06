@@ -285,8 +285,9 @@ function processFrame() {
 
                 // Combined check:
                 // 1. Structure similiar (diff < 300)
-                // 2. Color very similar (hist > 0.75)
-                if (diffScore < 300 && histScore > 0.75) {
+                // 2. Color very similar (hist > 0.72)
+                // v1.5.1: Relaxed slightly to 0.72 to handle lighting
+                if (diffScore < 300 && histScore > 0.72) {
                     // Lower score is better for sorting, so invert histScore
                     // We treat (1 - histScore) * 1000 as a "penalty"
                     let totalScore = diffScore + (1 - histScore) * 1000;
@@ -370,7 +371,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5.1`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
