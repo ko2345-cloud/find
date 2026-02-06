@@ -305,17 +305,24 @@ function processFrame() {
             for (let j = i + 1; j < rois.length; j++) {
                 if (visited[j]) continue;
 
-                // v1.6: Dual Check
+                // v1.7.1: Triple Check
                 // 1. Zonal Structure Check (Quad Diff): Finds local shape diffs (e.g. beak vs no beak)
                 // 2. Histogram Color Check: Finds global color diffs (e.g. Yellow vs Blue)
+                // 3. Size Similarity Check: Reject if sizes differ by more than 15%
 
                 let zonalDiff = getZonalScore(rois[i].mat, rois[j].mat);
                 let histScore = cv.compareHist(rois[i].hist, rois[j].hist, cv.HISTCMP_CORREL);
 
-                // Validation Thresholds (v1.7: STRICTER)
-                // Zonal Diff: Must be < 1500 (Stricter than 1800)
-                // Hist Score: Must be > 0.85 (Much stricter than 0.70)
-                if (zonalDiff < 1500 && histScore > 0.85) {
+                // Size similarity check
+                let area1 = rois[i].rect.width * rois[i].rect.height;
+                let area2 = rois[j].rect.width * rois[j].rect.height;
+                let sizeDiff = Math.abs(area1 - area2) / Math.max(area1, area2);
+
+                // Validation Thresholds (v1.7.1: EVEN STRICTER)
+                // Zonal Diff: Must be < 1200 (Even stricter than 1500)
+                // Hist Score: Must be > 0.90 (Extremely strict)
+                // Size Diff: Must be < 0.15 (Max 15% size difference)
+                if (zonalDiff < 1200 && histScore > 0.90 && sizeDiff < 0.15) {
 
                     // Score formula: Lower is better
                     // ZonalDiff is roughly 0-4000
@@ -401,7 +408,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5.2`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.7.1`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
