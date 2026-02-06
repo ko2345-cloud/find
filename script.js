@@ -123,9 +123,14 @@ function adjustCanvasSize() {
     const w = video.videoWidth;
     const h = video.videoHeight;
 
-    // v1.5: Do NOT set video.width/height attributes. This causes distortion.
-    // video.width = w; 
-    // video.height = h;
+    // v1.5.2 CRITICAL FIX:
+    // 1. Set attributes so OpenCV.js knows the resolution (Fixes "Bad size" error)
+    video.width = w;
+    video.height = h;
+
+    // 2. Set CSS styles to ensure it fits the screen and ISN'T squashed (Fixes Distortion)
+    video.style.width = "100%";
+    video.style.height = "auto";
 
     // Canvas must match the intrinsic video resolution for correct coordinate mapping
     canvas.width = w;
@@ -371,7 +376,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5.1`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5.2`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
