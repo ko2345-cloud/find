@@ -2,7 +2,9 @@ let video, canvas, ctx, startBtn, captureBtn, statusElem;
 let stream = null;
 let isCvReady = false;
 
-// Main entry point
+// v1.6: Capture Mode state
+window.isCaptured = false;
+
 // Main entry point
 document.addEventListener('DOMContentLoaded', () => {
     video = document.getElementById('videoInput');
@@ -20,11 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera();
         }
     });
-
-    // v1.6: Capture Mode state
-    // Define scope-safe state
-    // If we re-run this, reset state
-    window.isCaptured = false;
 
     captureBtn.addEventListener('click', () => {
         if (!window.isCaptured) {
@@ -72,7 +69,9 @@ function updateStatus() {
         startBtn.innerText = '開啟鏡頭';
         startBtn.style.backgroundColor = '#34c759';
     } else {
-        statusElem.innerText = '系統就緒。請對準畫面並點擊「分析畫面」。';
+        if (!window.isCaptured) {
+            statusElem.innerText = '系統就緒。請對準畫面並點擊「鎖定分析」。';
+        }
         startBtn.innerText = '關閉鏡頭';
         startBtn.style.backgroundColor = '#ff3b30';
     }
@@ -87,10 +86,6 @@ function checkEnableCapture() {
         captureBtn.style.backgroundColor = '#ccc';
     }
 }
-
-// Camera controls
-
-});
 
 
 
