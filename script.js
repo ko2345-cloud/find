@@ -245,15 +245,15 @@ function processFrame() {
         }
 
         // 2. Find Pairs
+        // 2. Find Pairs
         let pairs = [];
         let visited = new Array(rois.length).fill(false);
 
         for (let i = 0; i < rois.length; i++) {
             if (visited[i]) continue;
 
-            // Find BEST match, not just first match
-            let bestMatchIndex = -1;
-            let minDiff = Number.MAX_VALUE;
+            // Find ALL potential matches first
+            let candidates = [];
 
             for (let j = i + 1; j < rois.length; j++) {
                 if (visited[j]) continue;
@@ -261,9 +261,25 @@ function processFrame() {
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
 
                 // Empirical threshold for 32x32 image
-                if (diffScore < 1500 && diffScore < minDiff) {
-                    minDiff = diffScore;
-                    bestMatchIndex = j;
+                if (diffScore < 1500) { 
+                    candidates.push({ index: j, score: diffScore });
+                }
+            }
+
+            // Sort candidates by score (best visual match first)
+            candidates.sort((a, b) => a.score - b.score);
+
+            // Find the best VALID match (one that can be connected)
+            let bestMatchIndex = -1;
+            
+            for (let candidate of candidates) {
+                let targetRoi = rois[candidate.index];
+                
+                // Check if a path exists between source (rois[i]) and target (targetRoi)
+                // We pass 'tiles' as the list of all obstacles
+                if (checkPathConnectivity(rois[i], targetRoi, tiles)) {
+                    bestMatchIndex = candidate.index;
+                    break; // Use the first valid match found
                 }
             }
 
