@@ -259,8 +259,8 @@ function processFrame() {
 
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
 
-                // Strict threshold for 32x32 image (v1.2: lowered to 1200)
-                if (diffScore < 1200) {
+                // Strict threshold for 32x32 image (v1.3: lowered to 250 for high precision)
+                if (diffScore < 250) {
                     candidates.push({ index: j, score: diffScore });
                 }
             }
@@ -334,7 +334,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.2`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.3`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
