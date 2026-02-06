@@ -2,8 +2,110 @@ let video, canvas, ctx, startBtn, captureBtn, statusElem;
 let stream = null;
 let isCvReady = false;
 
+// v2.0: Template-based matching
+let templates = []; // Array of {id, mat, hist, filename}
+let templatesLoaded = false;
+const TEMPLATE_FOLDER = 'all_icon/';
+
 // v1.6: Capture Mode state
 window.isCaptured = false;
+
+// v2.0: Load reference templates
+async function loadTemplates() {
+    const templateFiles = [
+        '圖片_2026-02-06_150214_706.png',
+        '圖片_2026-02-06_150221_471.png',
+        '圖片_2026-02-06_150223_686.png',
+        '圖片_2026-02-06_150225_962.png',
+        '圖片_2026-02-06_150227_681.png',
+        '圖片_2026-02-06_150229_526.png',
+        '圖片_2026-02-06_150231_424.png',
+        '圖片_2026-02-06_150234_164.png',
+        '圖片_2026-02-06_150236_323.png',
+        '圖片_2026-02-06_150238_473.png',
+        '圖片_2026-02-06_150240_338.png',
+        '圖片_2026-02-06_150242_370.png',
+        '圖片_2026-02-06_150244_393.png',
+        '圖片_2026-02-06_150246_264.png',
+        '圖片_2026-02-06_150248_503.png',
+        '圖片_2026-02-06_150251_492.png',
+        '圖片_2026-02-06_150254_245.png',
+        '圖片_2026-02-06_150256_466.png'
+    ];
+
+    console.log('開始加載模板...');
+    if (statusElem) statusElem.innerText = '正在加載圖案模板...';
+
+    for (let i = 0; i < templateFiles.length; i++) {
+        try {
+            const img = new Image();
+            const imgPath = TEMPLATE_FOLDER + templateFiles[i];
+
+            // Wait for image to load
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+                img.src = imgPath;
+            });
+
+            // Convert to OpenCV Mat
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            let tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
+
+            let src = cv.imread(tempCanvas);
+
+            // Apply same preprocessing as tiles (center crop)
+            let w = src.cols;
+            let h = src.rows;
+            let cropMargin = w * 0.25;
+
+            let safeRect = new cv.Rect(
+                Math.max(0, cropMargin),
+                Math.max(0, cropMargin),
+                Math.max(1, w - cropMargin * 2),
+                Math.max(1, h - cropMargin * 2)
+            );
+
+            let roi = src.roi(safeRect);
+            let resized = new cv.Mat();
+            cv.resize(roi, resized, new cv.Size(32, 32));
+
+            // Calculate histogram
+            let hsv = new cv.Mat();
+            cv.cvtColor(resized, hsv, cv.COLOR_RGBA2RGB);
+            cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+
+            let hist = new cv.Mat();
+            let mask = new cv.Mat();
+            let histVec = new cv.MatVector();
+            histVec.push_back(hsv);
+            cv.calcHist(histVec, [0, 1], mask, hist, [50, 60], [0, 180, 0, 256]);
+            cv.normalize(hist, hist, 0, 1, cv.NORM_MINMAX);
+
+            templates.push({
+                id: i,
+                mat: resized,
+                hist: hist,
+                filename: templateFiles[i]
+            });
+
+            // Cleanup
+            src.delete(); roi.delete(); hsv.delete(); mask.delete(); histVec.delete();
+
+            console.log(`已加載模板 ${i + 1}/${templateFiles.length}: ${templateFiles[i]}`);
+
+        } catch (err) {
+            console.error(`加載模板失敗 ${templateFiles[i]}:`, err);
+        }
+    }
+
+    templatesLoaded = true;
+    console.log(`模板加載完成，共 ${templates.length} 個`);
+    if (statusElem) statusElem.innerText = `模板已就緒 (${templates.length} 個圖案)。請開啟鏡頭。`;
+}
 
 // Main entry point
 document.addEventListener('DOMContentLoaded', () => {
@@ -52,9 +154,13 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Called by OpenCV onload (via HTML shim) or DOMContentLoaded
-function initApp() {
+async function initApp() {
     isCvReady = true;
     console.log('OpenCV.js is ready');
+
+    // v2.0: Load templates
+    await loadTemplates();
+
     updateStatus();
     checkEnableCapture();
 }
@@ -292,7 +398,7 @@ function processFrame() {
             roi.delete(); hsv.delete(); mask.delete(); histVec.delete();
         }
 
-        // 2. Find Pairs
+        // v2.0: Template Classification & Pairing
         let pairs = [];
         let visited = new Array(rois.length).fill(false);
 
@@ -408,7 +514,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.7.1`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v2.0`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
