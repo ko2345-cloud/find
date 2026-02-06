@@ -258,10 +258,13 @@ function processFrame() {
                 if (visited[j]) continue;
 
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
+                let colorDist = getColorDistance(rois[i].mat, rois[j].mat);
 
-                // Strict threshold for 32x32 image (v1.3: lowered to 250 for high precision)
-                if (diffScore < 250) {
-                    candidates.push({ index: j, score: diffScore });
+                // v1.4: Combined check
+                // 1. Structure must be similar (diffScore < 300)
+                // 2. Color must be similar (colorDist < 30) - rejects Blue vs Yellow
+                if (diffScore < 300 && colorDist < 30) {
+                    candidates.push({ index: j, score: diffScore + colorDist * 10 }); // Weight color
                 }
             }
 
@@ -334,7 +337,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.3`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.4`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
@@ -364,6 +367,19 @@ function getDifficultyScore(mat1, mat2) {
     diff.delete(); grayDiff.delete(); binaryDiff.delete();
 
     return differentPixels;
+}
+
+// v1.4: Color Distance (Mean RGB difference)
+function getColorDistance(mat1, mat2) {
+    let mean1 = cv.mean(mat1);
+    let mean2 = cv.mean(mat2);
+    // Euclidean distance in RGB
+    let dist = Math.sqrt(
+        Math.pow(mean1[0] - mean2[0], 2) +
+        Math.pow(mean1[1] - mean2[1], 2) +
+        Math.pow(mean1[2] - mean2[2], 2)
+    );
+    return dist;
 }
 
 // v1.2: Strict Onet Pathfinding (Orthogonal Only)

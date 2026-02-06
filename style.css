@@ -39,7 +39,7 @@ h1 {
     position: relative;
     width: 100%;
     max-width: 100%;
-    aspect-ratio: 3/4; /* Adjust based on typical phone camera aspect ratio */
+    /* aspect-ratio: 3/4; Removed to allow natural aspect ratio */
     background: #000;
     overflow: hidden;
     border-radius: 8px;
@@ -48,8 +48,7 @@ h1 {
 
 video {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto; /* Allow height to adjust naturally */
     display: block;
 }
 
