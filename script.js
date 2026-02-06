@@ -123,8 +123,11 @@ function adjustCanvasSize() {
     const w = video.videoWidth;
     const h = video.videoHeight;
 
-    video.width = w;
-    video.height = h;
+    // v1.5: Do NOT set video.width/height attributes. This causes distortion.
+    // video.width = w; 
+    // video.height = h;
+
+    // Canvas must match the intrinsic video resolution for correct coordinate mapping
     canvas.width = w;
     canvas.height = h;
 }
@@ -235,13 +238,29 @@ function processFrame() {
             let roi = src.roi(safeRect);
             let resized = new cv.Mat();
             cv.resize(roi, resized, new cv.Size(32, 32));
+
+            // v1.5: Pre-calculate HSV Histogram for color matching
+            let hsv = new cv.Mat();
+            cv.cvtColor(resized, hsv, cv.COLOR_RGBA2RGB);
+            cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+
+            let hist = new cv.Mat();
+            let mask = new cv.Mat();
+            let histVec = new cv.MatVector();
+            histVec.push_back(hsv);
+
+            // Calculate histogram (Hue and Saturation only to be brightness invariant-ish)
+            cv.calcHist(histVec, [0, 1], mask, hist, [50, 60], [0, 180, 0, 256]);
+            cv.normalize(hist, hist, 0, 1, cv.NORM_MINMAX);
+
             rois.push({
                 id: i,
                 rect: rect,
                 mat: resized,
+                hist: hist, // Store histogram
                 center: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
             });
-            roi.delete();
+            roi.delete(); hsv.delete(); mask.delete(); histVec.delete();
         }
 
         // 2. Find Pairs
@@ -258,13 +277,20 @@ function processFrame() {
                 if (visited[j]) continue;
 
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
-                let colorDist = getColorDistance(rois[i].mat, rois[j].mat);
 
-                // v1.4: Combined check
-                // 1. Structure must be similar (diffScore < 300)
-                // 2. Color must be similar (colorDist < 30) - rejects Blue vs Yellow
-                if (diffScore < 300 && colorDist < 30) {
-                    candidates.push({ index: j, score: diffScore + colorDist * 10 }); // Weight color
+                // v1.5: Histogram Comparison (Correlation)
+                // 1.0 = Perfect match, 0.0 = No match
+                // We want HIGH correlation (> 0.8) for same color/style
+                let histScore = cv.compareHist(rois[i].hist, rois[j].hist, cv.HISTCMP_CORREL);
+
+                // Combined check:
+                // 1. Structure similiar (diff < 300)
+                // 2. Color very similar (hist > 0.75)
+                if (diffScore < 300 && histScore > 0.75) {
+                    // Lower score is better for sorting, so invert histScore
+                    // We treat (1 - histScore) * 1000 as a "penalty"
+                    let totalScore = diffScore + (1 - histScore) * 1000;
+                    candidates.push({ index: j, score: totalScore, debugDiff: diffScore, debugHist: histScore });
                 }
             }
 
@@ -290,7 +316,8 @@ function processFrame() {
                 pairs.push({
                     p1: rois[i],
                     p2: rois[bestMatchIndex],
-                    score: candidates[0].score // Best candidate is at index 0 after sort
+                    score: candidates[0].score, // Best candidate is at index 0 after sort
+                    histMatch: candidates[0].debugHist.toFixed(2) // Save for display
                 });
                 visited[i] = true;
                 visited[bestMatchIndex] = true;
@@ -332,12 +359,18 @@ function processFrame() {
             // Draw connecting line
             cv.line(src, new cv.Point(p1.x, p1.y), new cv.Point(p2.x, p2.y), color, 2);
 
+            // v1.5: Draw Score text for verification
+            // Show Histogram Score (H:0.99) - near 1.0 is good
+            let text = `H:${pair.histMatch}`;
+            cv.putText(src, text, new cv.Point((p1.x + p2.x) / 2, (p1.y + p2.y) / 2), cv.FONT_HERSHEY_SIMPLEX, 0.5, new cv.Scalar(255, 255, 255, 255), 2);
+            cv.putText(src, text, new cv.Point((p1.x + p2.x) / 2, (p1.y + p2.y) / 2), cv.FONT_HERSHEY_SIMPLEX, 0.5, new cv.Scalar(0, 0, 0, 255), 1);
+
             // Draw center dots
             cv.circle(src, new cv.Point(p1.x, p1.y), 5, color, -1);
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.4`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v1.5`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
