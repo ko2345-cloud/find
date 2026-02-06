@@ -10,6 +10,76 @@ const TEMPLATE_FOLDER = 'all_icon/';
 // v1.6: Capture Mode state
 window.isCaptured = false;
 
+// v2.1: Smart crop to extract white circle from reference images
+function cropWhiteCircle(src) {
+    try {
+        let gray = new cv.Mat();
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+        let binary = new cv.Mat();
+        cv.threshold(gray, binary, 180, 255, cv.THRESH_BINARY);
+
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        let maxArea = 0;
+        let maxContourIdx = -1;
+
+        for (let i = 0; i < contours.size(); i++) {
+            let area = cv.contourArea(contours.get(i));
+            if (area > maxArea) {
+                maxArea = area;
+                maxContourIdx = i;
+            }
+        }
+
+        if (maxContourIdx === -1) {
+            console.warn('No circle found, using center 70%');
+            let w = src.cols;
+            let h = src.rows;
+            let margin = w * 0.15;
+            let roi = src.roi(new cv.Rect(margin, margin, w - margin * 2, h - margin * 2));
+            let result = roi.clone();
+            roi.delete();
+            gray.delete(); binary.delete(); contours.delete(); hierarchy.delete();
+            return result;
+        }
+
+        let rect = cv.boundingRect(contours.get(maxContourIdx));
+
+        let padding = 5;
+        let size = Math.max(rect.width, rect.height) + padding * 2;
+        let cx = rect.x + rect.width / 2;
+        let cy = rect.y + rect.height / 2;
+
+        let cropRect = new cv.Rect(
+            Math.max(0, cx - size / 2),
+            Math.max(0, cy - size / 2),
+            Math.min(size, src.cols),
+            Math.min(size, src.rows)
+        );
+
+        let cropped = src.roi(cropRect);
+        let result = cropped.clone();
+
+        cropped.delete();
+        gray.delete(); binary.delete(); contours.delete(); hierarchy.delete();
+
+        return result;
+
+    } catch (err) {
+        console.error('cropWhiteCircle error:', err);
+        let w = src.cols;
+        let h = src.rows;
+        let margin = w * 0.15;
+        let roi = src.roi(new cv.Rect(margin, margin, w - margin * 2, h - margin * 2));
+        let result = roi.clone();
+        roi.delete();
+        return result;
+    }
+}
+
 // v2.0: Load reference templates
 async function loadTemplates() {
     const templateFiles = [
@@ -55,11 +125,15 @@ async function loadTemplates() {
             let tempCtx = tempCanvas.getContext('2d');
             tempCtx.drawImage(img, 0, 0);
 
+
             let src = cv.imread(tempCanvas);
 
-            // Apply same preprocessing as tiles (center crop)
-            let w = src.cols;
-            let h = src.rows;
+            // v2.1: Step 1 - Auto-crop white circle to remove background
+            let cropped = cropWhiteCircle(src);
+
+            // v2.1: Step 2 - Center crop (inner 50%)
+            let w = cropped.cols;
+            let h = cropped.rows;
             let cropMargin = w * 0.25;
 
             let safeRect = new cv.Rect(
@@ -69,33 +143,48 @@ async function loadTemplates() {
                 Math.max(1, h - cropMargin * 2)
             );
 
-            let roi = src.roi(safeRect);
+            let centerCropped = cropped.roi(safeRect);
             let resized = new cv.Mat();
-            cv.resize(roi, resized, new cv.Size(32, 32));
+            cv.resize(centerCropped, resized, new cv.Size(32, 32));
 
-            // Calculate histogram
-            let hsv = new cv.Mat();
-            cv.cvtColor(resized, hsv, cv.COLOR_RGBA2RGB);
-            cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+            // v2.1: Step 3 - Generate 4 rotation versions (0°, 90°, 180°, 270°)
+            let rotations = [resized.clone()]; // 0°
+            for (let angle of [90, 180, 270]) {
+                let rotated = new cv.Mat();
+                let rotCode = angle === 90 ? cv.ROTATE_90_CLOCKWISE :
+                    angle === 180 ? cv.ROTATE_180 : cv.ROTATE_90_COUNTERCLOCKWISE;
+                cv.rotate(resized, rotated, rotCode);
+                rotations.push(rotated);
+            }
 
-            let hist = new cv.Mat();
-            let mask = new cv.Mat();
-            let histVec = new cv.MatVector();
-            histVec.push_back(hsv);
-            cv.calcHist(histVec, [0, 1], mask, hist, [50, 60], [0, 180, 0, 256]);
-            cv.normalize(hist, hist, 0, 1, cv.NORM_MINMAX);
+            // v2.1: Step 4 - Calculate histograms for ALL rotations
+            for (let r = 0; r < rotations.length; r++) {
+                let hsv = new cv.Mat();
+                cv.cvtColor(rotations[r], hsv, cv.COLOR_RGBA2RGB);
+                cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
-            templates.push({
-                id: i,
-                mat: resized,
-                hist: hist,
-                filename: templateFiles[i]
-            });
+                let hist = new cv.Mat();
+                let mask = new cv.Mat();
+                let histVec = new cv.MatVector();
+                histVec.push_back(hsv);
+                cv.calcHist(histVec, [0, 1], mask, hist, [50, 60], [0, 180, 0, 256]);
+                cv.normalize(hist, hist, 0, 1, cv.NORM_MINMAX);
+
+                templates.push({
+                    id: i * 4 + r,      // Unique ID for each rotation
+                    baseID: i,          // Original template ID
+                    rotation: r * 90,   // Rotation angle
+                    mat: rotations[r],
+                    hist: hist,
+                    filename: `T${i}_R${r * 90}`
+                });
+
+                hsv.delete(); mask.delete(); histVec.delete();
+            }
 
             // Cleanup
-            src.delete(); roi.delete(); hsv.delete(); mask.delete(); histVec.delete();
-
-            console.log(`已加載模板 ${i + 1}/${templateFiles.length}: ${templateFiles[i]}`);
+            src.delete(); cropped.delete(); centerCropped.delete(); resized.delete();
+            console.log(`模板 ${i + 1}/${templateFiles.length} 已加載 (含4個旋轉版本)`);
 
         } catch (err) {
             console.error(`加載模板失敗 ${templateFiles[i]}:`, err);
@@ -103,8 +192,8 @@ async function loadTemplates() {
     }
 
     templatesLoaded = true;
-    console.log(`模板加載完成，共 ${templates.length} 個`);
-    if (statusElem) statusElem.innerText = `模板已就緒 (${templates.length} 個圖案)。請開啟鏡頭。`;
+    console.log(`模板加載完成，共 ${templates.length} 個 (18 圖案 x 4 旋轉)`);
+    if (statusElem) statusElem.innerText = `模板已就緒 (18 圖案 x 4 旋轉)。請開啟鏡頭。`;
 }
 
 // Main entry point
@@ -514,7 +603,7 @@ function processFrame() {
             cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v2.0`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組) v2.1`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
