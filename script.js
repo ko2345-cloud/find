@@ -3,6 +3,7 @@ let stream = null;
 let isCvReady = false;
 
 // Main entry point
+// Main entry point
 document.addEventListener('DOMContentLoaded', () => {
     video = document.getElementById('videoInput');
     canvas = document.getElementById('canvasOutput');
@@ -19,12 +20,38 @@ document.addEventListener('DOMContentLoaded', () => {
             startCamera();
         }
     });
-    captureBtn.addEventListener('click', processFrame);
+
+    // v1.6: Capture Mode state
+    // Define scope-safe state
+    // If we re-run this, reset state
+    window.isCaptured = false;
+
+    captureBtn.addEventListener('click', () => {
+        if (!window.isCaptured) {
+            // State: Capture
+            if (!stream) return;
+            video.pause(); // Freeze frame
+            processFrame(); // Run analysis ONCE on frozen frame
+            captureBtn.innerText = "🔄 重置 / 繼續";
+            captureBtn.style.backgroundColor = "#ff9500"; // Orange
+            window.isCaptured = true;
+        } else {
+            // State: Reset
+            video.play(); // Resume live view
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear drawings
+            statusElem.innerText = "請對準後點擊 [鎖定分析]";
+            captureBtn.innerText = "📷 鎖定畫面 & 分析";
+            captureBtn.style.backgroundColor = "#007aff"; // Blue
+            window.isCaptured = false;
+        }
+    });
 
     // Check if OpenCV loaded before DOM
     if (window.isOpenCvLoaded) {
         initApp();
     }
+
+    checkEnableCapture();
 });
 
 // Called by OpenCV onload (via HTML shim) or DOMContentLoaded
@@ -62,14 +89,10 @@ function checkEnableCapture() {
 }
 
 // Camera controls
-startBtn.addEventListener('click', () => {
-    if (stream) {
-        stopCamera();
-    } else {
-        startCamera();
-    }
+
 });
-captureBtn.addEventListener('click', processFrame);
+
+
 
 async function startCamera() {
     const constraints = {
@@ -281,22 +304,23 @@ function processFrame() {
             for (let j = i + 1; j < rois.length; j++) {
                 if (visited[j]) continue;
 
-                let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
+                // v1.6: Dual Check
+                // 1. Zonal Structure Check (Quad Diff): Finds local shape diffs (e.g. beak vs no beak)
+                // 2. Histogram Color Check: Finds global color diffs (e.g. Yellow vs Blue)
 
-                // v1.5: Histogram Comparison (Correlation)
-                // 1.0 = Perfect match, 0.0 = No match
-                // We want HIGH correlation (> 0.8) for same color/style
+                let zonalDiff = getZonalScore(rois[i].mat, rois[j].mat);
                 let histScore = cv.compareHist(rois[i].hist, rois[j].hist, cv.HISTCMP_CORREL);
 
-                // Combined check:
-                // 1. Structure similiar (diff < 300)
-                // 2. Color very similar (hist > 0.72)
-                // v1.5.1: Relaxed slightly to 0.72 to handle lighting
-                if (diffScore < 300 && histScore > 0.72) {
-                    // Lower score is better for sorting, so invert histScore
-                    // We treat (1 - histScore) * 1000 as a "penalty"
-                    let totalScore = diffScore + (1 - histScore) * 1000;
-                    candidates.push({ index: j, score: totalScore, debugDiff: diffScore, debugHist: histScore });
+                // Validation Thresholds (v1.6)
+                // Zonal Diff: Must be < 1800 (for 16x16 quadrant). This is strict!
+                // Hist Score: Must be > 0.70
+                if (zonalDiff < 1800 && histScore > 0.70) {
+
+                    // Score formula: Lower is better
+                    // ZonalDiff is roughly 0-4000
+                    // HistPenalty is (1 - 0.9) * 10000 = 1000
+                    let totalScore = zonalDiff + (1 - histScore) * 5000;
+                    candidates.push({ index: j, score: totalScore, debugDiff: zonalDiff, debugHist: histScore });
                 }
             }
 
@@ -391,6 +415,39 @@ function processFrame() {
 }
 
 // Helper: Get difference score (lower is more similar)
+// v1.6: Zonal Matching (Divide into 4 quadrants)
+// Returns the MAXIMUM difference found in any quadrant.
+// If two images differ significantly in just ONE corner (e.g. beak), this score will shoot up.
+function getZonalScore(mat1, mat2) {
+    let w = mat1.cols;
+    let h = mat1.rows;
+    let hw = Math.floor(w / 2);
+    let hh = Math.floor(h / 2);
+
+    // Define 4 quadrants
+    let rects = [
+        new cv.Rect(0, 0, hw, hh),      // TL
+        new cv.Rect(hw, 0, hw, hh),     // TR
+        new cv.Rect(0, hh, hw, hh),     // BL
+        new cv.Rect(hw, hh, hw, hh)     // BR
+    ];
+
+    let maxDiff = 0;
+
+    for (let r of rects) {
+        let roi1 = mat1.roi(r);
+        let roi2 = mat2.roi(r);
+        let diff = getDifficultyScore(roi1, roi2); // Standard absdiff on sub-region
+
+        if (diff > maxDiff) maxDiff = diff;
+
+        roi1.delete();
+        roi2.delete();
+    }
+    return maxDiff;
+}
+
+// v1.0: Basic Structural Difference (Absolute Pixel Diff) used by ZonalScore
 function getDifficultyScore(mat1, mat2) {
     let diff = new cv.Mat();
     cv.absdiff(mat1, mat2, diff);
