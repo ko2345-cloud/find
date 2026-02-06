@@ -261,7 +261,7 @@ function processFrame() {
                 let diffScore = getDifficultyScore(rois[i].mat, rois[j].mat);
 
                 // Empirical threshold for 32x32 image
-                if (diffScore < 1500) { 
+                if (diffScore < 1500) {
                     candidates.push({ index: j, score: diffScore });
                 }
             }
@@ -271,10 +271,10 @@ function processFrame() {
 
             // Find the best VALID match (one that can be connected)
             let bestMatchIndex = -1;
-            
+
             for (let candidate of candidates) {
                 let targetRoi = rois[candidate.index];
-                
+
                 // Check if a path exists between source (rois[i]) and target (targetRoi)
                 // We pass 'tiles' as the list of all obstacles
                 if (checkPathConnectivity(rois[i], targetRoi, tiles)) {
@@ -284,23 +284,58 @@ function processFrame() {
             }
 
             if (bestMatchIndex !== -1) {
-                pairs.push([rois[i], rois[bestMatchIndex]]);
+                // Store match with score
+                pairs.push({
+                    p1: rois[i],
+                    p2: rois[bestMatchIndex],
+                    score: candidates[0].score // Best candidate is at index 0 after sort
+                });
                 visited[i] = true;
                 visited[bestMatchIndex] = true;
             }
         }
 
         // 3. Draw Results
-        for (let pair of pairs) {
-            let p1 = pair[0].center;
-            let p2 = pair[1].center;
-            // Draw matching dots
-            cv.circle(src, new cv.Point(p1.x, p1.y), 15, new cv.Scalar(0, 0, 255, 255), -1); // Red dot
-            cv.circle(src, new cv.Point(p2.x, p2.y), 15, new cv.Scalar(0, 0, 255, 255), -1);
-            cv.line(src, new cv.Point(p1.x, p1.y), new cv.Point(p2.x, p2.y), new cv.Scalar(255, 255, 0, 255), 3); // Cyan line
+        // Sort pairs by score (best visual match first)
+        pairs.sort((a, b) => a.score - b.score);
+
+        // Define distinct colors for the hints
+        const colors = [
+            new cv.Scalar(255, 0, 0, 255),   // Red
+            new cv.Scalar(0, 255, 0, 255),   // Green
+            new cv.Scalar(0, 0, 255, 255),   // Blue
+            new cv.Scalar(255, 255, 0, 255), // Cyan
+            new cv.Scalar(255, 0, 255, 255)  // Magenta
+        ];
+
+        let displayCount = Math.min(pairs.length, 5); // Show up to 5 best pairs
+
+        for (let k = 0; k < displayCount; k++) {
+            let pair = pairs[k];
+            let p1 = pair.p1.center;
+            let p2 = pair.p2.center;
+            let p1Rect = pair.p1.rect;
+            let p2Rect = pair.p2.rect;
+            let color = colors[k % colors.length];
+
+            // Draw bounding boxes
+            let pt1_tl = new cv.Point(p1Rect.x, p1Rect.y);
+            let pt1_br = new cv.Point(p1Rect.x + p1Rect.width, p1Rect.y + p1Rect.height);
+            cv.rectangle(src, pt1_tl, pt1_br, color, 3);
+
+            let pt2_tl = new cv.Point(p2Rect.x, p2Rect.y);
+            let pt2_br = new cv.Point(p2Rect.x + p2Rect.width, p2Rect.y + p2Rect.height);
+            cv.rectangle(src, pt2_tl, pt2_br, color, 3);
+
+            // Draw connecting line
+            cv.line(src, new cv.Point(p1.x, p1.y), new cv.Point(p2.x, p2.y), color, 2);
+
+            // Draw center dots
+            cv.circle(src, new cv.Point(p1.x, p1.y), 5, color, -1);
+            cv.circle(src, new cv.Point(p2.x, p2.y), 5, color, -1);
         }
 
-        statusElem.innerText = `找到 ${pairs.length} 對圖案 (共偵測到 ${tiles.length} 個區塊)`;
+        statusElem.innerText = `找到 ${pairs.length} 對圖案 (顯示最佳 ${displayCount} 組)`;
         cv.imshow('canvasOutput', src);
 
         // Cleanup
