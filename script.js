@@ -251,13 +251,17 @@ function processFrame() {
         for (let i = 0; i < tiles.length; i++) {
             let rect = tiles[i];
 
-            // Shrink ROI slightly to avoid border noise
-            let margin = 4;
+            // v1.7: Center Cropping (Focus on inner 50%)
+            // We crop 25% from top/bottom/left/right to remove the white button rim
+            // This focuses analysis on the actual unique icon
+            let cropMargin = rect.width * 0.25;
+
+            // Ensure crop doesn't go out of bounds
             let safeRect = new cv.Rect(
-                Math.min(src.cols - 1, Math.max(0, rect.x + margin)),
-                Math.min(src.rows - 1, Math.max(0, rect.y + margin)),
-                Math.max(1, rect.width - margin * 2),
-                Math.max(1, rect.height - margin * 2)
+                Math.min(src.cols - 1, Math.max(0, rect.x + cropMargin)),
+                Math.min(src.rows - 1, Math.max(0, rect.y + cropMargin)),
+                Math.max(1, rect.width - cropMargin * 2),
+                Math.max(1, rect.height - cropMargin * 2)
             );
 
             let roi = src.roi(safeRect);
@@ -308,10 +312,10 @@ function processFrame() {
                 let zonalDiff = getZonalScore(rois[i].mat, rois[j].mat);
                 let histScore = cv.compareHist(rois[i].hist, rois[j].hist, cv.HISTCMP_CORREL);
 
-                // Validation Thresholds (v1.6)
-                // Zonal Diff: Must be < 1800 (for 16x16 quadrant). This is strict!
-                // Hist Score: Must be > 0.70
-                if (zonalDiff < 1800 && histScore > 0.70) {
+                // Validation Thresholds (v1.7: STRICTER)
+                // Zonal Diff: Must be < 1500 (Stricter than 1800)
+                // Hist Score: Must be > 0.85 (Much stricter than 0.70)
+                if (zonalDiff < 1500 && histScore > 0.85) {
 
                     // Score formula: Lower is better
                     // ZonalDiff is roughly 0-4000
